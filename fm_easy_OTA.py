@@ -3,7 +3,10 @@
 #
 # Author: Duke Fong <d@d-l.io>
 # Modified: Bailey
-
+'''
+Depends:
+  pip3 install bleak pythoncrc
+'''
 #search
 import os
 #kw = keyword, fn = file_name
