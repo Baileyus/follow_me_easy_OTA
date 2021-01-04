@@ -2,25 +2,26 @@
 # Software License Agreement (BSD License)
 #
 # Author: Duke Fong <d@d-l.io>
+# Modified: Bailey
 
-"""\
-Follow Me OTA Tool
-
-Depends:
-  pip3 install bleak pythoncrc
-
-Args:
-  --scan
-  --mac MAC         # set mac address, e.g.: "f7:d8:78:cf:93:5b"
-
-  --bl  PATH-TO-BIN
-  --sd  PATH-TO-BIN
-  --app PATH-TO-BIN
-
-  --read_conf       # read Bootloader Params
-  --reboot_to 0 or 1
-  --reboot
-"""
+#search
+import os
+#kw = keyword, fn = file_name
+bl = ''
+app = ''
+def search(path = '', kw = ''):
+    for item in os.listdir(path):
+        item_path = os.path.join(path, item)
+        if os.path.isdir(item_path):
+            search(item_path, kw)
+        elif os.path.isfile(item_path):
+            if kw in item:
+                return item_path
+                
+bl=search(path=r'./bin', kw='bl')
+app=search(path=r'./bin', kw='app')
+print(f'bl  file is [{bl[6::]}]')
+print(f'app file is [{app[6::]}]')
 
 import re
 import struct
@@ -29,36 +30,21 @@ from cd_args import CdArgs
 
 SDI_UUID = "64d3fff1-d166-11ea-87d0-0242ac130003"
 SDO_UUID = "64d3fff2-d166-11ea-87d0-0242ac130003"
-
 args = CdArgs()
 scan = args.get("--scan") != None
-mac_addr = args.get("--mac")
 
-reboot_to = int(args.get("--reboot_to", dft="-1"), 0)
 reboot = args.get("--reboot") != None
 read_conf = args.get("--read_conf") != None
 
-bl = args.get("--bl")
-sd = args.get("--sd")
-app = args.get("--app")
-
 bl_dat = b''
-sd_dat = b''
 app_dat = b''
 
-if bl:
-    with open(bl, 'rb') as f:
-        bl_dat = f.read()
-if sd:
-    with open(sd, 'rb') as f:
-        sd_dat = f.read()
-if app:
-    with open(app, 'rb') as f:
-        app_dat = f.read()
+with open(bl, 'rb') as f:
+    bl_dat = f.read()
+    
+with open(app, 'rb') as f:
+    app_dat = f.read()
 
-if (args.get("--help", "-h") != None or not mac_addr) and not scan:
-    print(__doc__)
-    exit()
 
 from bleak import BleakClient, discover
 from PyCRC.CRC16 import CRC16
@@ -119,63 +105,42 @@ async def send_cmd(client, cmd):
         return b''
 
 async def run(loop):
-    if scan:
-        print("scan...")
-        devices = await discover()
-        print("results:")
-        for d in devices:
-            print(d)
-        return
+    print("scan...")
+    devices = await discover()
+    print("results:")
+    for d in devices:
+        e = str(d)
+        g = 'BL' in e
+        if g:
+            mac_addr = str(e[:17:])
+            print(f"connect to {mac_addr}");
+            async with BleakClient(mac_addr, loop=loop) as client:
+                await client.start_notify(SDO_UUID, callback)
+                print("notify subscribed");
+                print("read version:", (await send_cmd(client, b"\x01\x01")).hex());
 
-    print(f"connect to {mac_addr}");
-    async with BleakClient(mac_addr, loop=loop) as client:
-        await client.start_notify(SDO_UUID, callback)
-        print("notify subscribed");
-        print("read version:", (await send_cmd(client, b"\x01\x01")).hex());
-
-        if read_conf:
-            conf = await send_cmd(client, b"\x0b\x00" + struct.pack("<IB", 0x7e000, 16))
-            print(f"read conf {conf[0]:x}: {conf[1:].hex()}");
-            return
-
-        if sd or bl:
-            if sd:
-                print("write sd:")
-                ret = await write_flash(client, 0x40000, sd_dat, True)
-                if ret:
-                    return
-
-            if bl:
+                #write bl
                 print("write bl:")
                 ret = await write_flash(client, 0x65000, bl_dat, True)
                 if ret:
                     return
+                    
+                #write app
+                print("write app:")
+                ret = await write_flash(client, 0x26000, app_dat, True)
+                if ret:
+                    return
+                    
+                #write conf    
+                print("write conf")
+                ret = await write_flash(client, 0x7e000, struct.pack("<IIII", 0xcdcd0001, len(bl_dat), 0, 0))
+                if ret:
+                    return
+                    
+                #reboot
+                print(f"reboot:", (await send_cmd(client, b"\x0a\x20")).hex())
 
-            print("write conf")
-            ret = await write_flash(client, 0x7e000, struct.pack("<IIII", 0xcdcd0001, len(bl_dat), len(sd_dat), 0))
-            if ret:
-                return
 
-        elif app:
-            print("write app:")
-            ret = await write_flash(client, 0x40000, app_dat, True)
-            if ret:
-                return
-
-            print("write conf")
-            ret = await write_flash(client, 0x7e000, struct.pack("<IIII", 0xcdcd0001, 0, 0, len(app_dat)))
-            if ret:
-                return
-
-        if reboot_to != -1:
-            print(f"reboot to {reboot_to}:", (await send_cmd(client, b"\x0a\x22" + struct.pack("<B", reboot_to))).hex())
-            return
-
-        if reboot:
-            print(f"reboot:", (await send_cmd(client, b"\x0a\x20")).hex())
-            return
-
-        print("write done")
 
 loop = asyncio.get_event_loop()
 loop.run_until_complete(run(loop))
